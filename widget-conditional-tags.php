@@ -3,7 +3,7 @@
  * Plugin Name:       Widget Conditional Tags
  * Plugin URI:        https://www.perun.net/
  * Description:       Zeigt klassische WordPress-Widgets abhängig von sicheren, whitelisted Conditional Tags an oder blendet sie aus – bewusst ohne eval(). Nachfolger-Idee zu „Widget Logic".
- * Version:           1.1.0
+ * Version:           1.2.0
  * Requires at least: 6.5
  * Requires PHP:      7.4
  * Author:            Vladimir Simović
@@ -23,7 +23,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'WCT_VERSION', '1.1.0' );
+define( 'WCT_VERSION', '1.2.0' );
 
 /**
  * Sicherer Parser und Auswerter für boolesche Ausdrücke über Conditional Tags.
@@ -149,6 +149,16 @@ final class WCT_Condition_Parser {
 			$name = trim( $name );
 
 			if ( ! preg_match( '/^[A-Za-z_][A-Za-z0-9_]*$/', $name ) ) {
+				continue;
+			}
+
+			// Nur tatsächlich aufrufbare Callbacks übernehmen. Ein per Filter
+			// ergänzter, aber nicht (mehr) vorhandener Tag würde sonst in einer
+			// Negation wie !is_woocommerce() zu !false = true kippen und das
+			// Widget unerwartet einblenden. Beim Speichern und im Frontend ist
+			// init bereits durchlaufen, alle aktiven Plugins sind geladen –
+			// is_callable() ist hier also verlässlich.
+			if ( ! is_callable( $callback ) ) {
 				continue;
 			}
 
@@ -556,6 +566,7 @@ final class WCT_Widget_Field {
 		add_action( 'in_widget_form', array( $this, 'render_field' ), 10, 3 );
 		add_filter( 'widget_update_callback', array( $this, 'update_instance' ), 10, 4 );
 		add_filter( 'widget_display_callback', array( $this, 'maybe_display' ), 10, 3 );
+		add_action( 'admin_notices', array( $this, 'maybe_block_editor_notice' ) );
 	}
 
 	/**
@@ -689,11 +700,61 @@ final class WCT_Widget_Field {
 		try {
 			return $this->parser->evaluate( $condition ) ? $instance : false;
 		} catch ( InvalidArgumentException $exception ) {
-			// Gespeicherte Bedingungen sind validiert. Sollte trotzdem eine
-			// ungültige durchrutschen: fail open, damit kein Widget
-			// unerwartet von der Seite verschwindet.
-			return $instance;
+			// Gespeicherte Bedingungen werden beim Speichern validiert.
+			// Rutscht doch eine ungültige durch (etwa weil ein per Filter
+			// ergänzter Tag nicht mehr verfügbar ist), wird das Widget
+			// vorsorglich ausgeblendet. Fail closed: das Verhalten bleibt
+			// vorhersagbar, statt im Fehlerfall Richtung „anzeigen" zu kippen.
+			return false;
 		}
+	}
+
+	/**
+	 * Weist im Backend darauf hin, dass das Plugin die klassische
+	 * Widget-Oberfläche braucht, wenn der Block-Widget-Editor aktiv ist.
+	 *
+	 * In dem Fall steht das Bedingungsfeld nicht zur Verfügung und die
+	 * Anzeige-Steuerung greift nicht. Der Hinweis erscheint nur für Nutzer,
+	 * die etwas ändern können, und nur auf der Widget- und der Plugin-Seite.
+	 *
+	 * @return void
+	 */
+	public function maybe_block_editor_notice() {
+		if ( ! function_exists( 'wp_use_widgets_block_editor' ) || ! wp_use_widgets_block_editor() ) {
+			return;
+		}
+
+		if ( ! current_user_can( 'activate_plugins' ) ) {
+			return;
+		}
+
+		$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+
+		if ( ! $screen instanceof WP_Screen || ! in_array( $screen->id, array( 'widgets', 'plugins' ), true ) ) {
+			return;
+		}
+
+		$link = sprintf(
+			'<a href="%s">%s</a>',
+			esc_url( admin_url( 'plugin-install.php?s=Classic+Widgets&tab=search&type=term' ) ),
+			esc_html__( 'Classic Widgets', 'widget-conditional-tags' )
+		);
+
+		/* translators: %s: Link zum Plugin „Classic Widgets". */
+		$hint = sprintf(
+			wp_kses(
+				__( 'Abhilfe: das Plugin %s installieren und aktivieren.', 'widget-conditional-tags' ),
+				array( 'a' => array( 'href' => array() ) )
+			),
+			$link
+		);
+
+		// $hint ist durch wp_kses() bereits abgesichert, daher hier roh ausgegeben.
+		printf(
+			'<div class="notice notice-warning"><p>%1$s</p><p>%2$s</p></div>',
+			esc_html__( 'Widget Conditional Tags ist für die klassische Widget-Oberfläche gebaut. Aktuell ist der Block-Widget-Editor aktiv – das Bedingungsfeld steht dort nicht zur Verfügung und die Anzeige-Steuerung greift nicht.', 'widget-conditional-tags' ),
+			$hint
+		);
 	}
 
 	/**
