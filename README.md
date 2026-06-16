@@ -68,7 +68,7 @@ add_filter( 'wct_allowed_conditions', static function ( $conditions ) {
 
 ## Lizenz
  
-GPL-2.0-or-later.
+GPL-2.0-or-later. https://github.com/Perun/widget-conditional-tags/blob/main/LICENSE 
  
 ## Autor
  
